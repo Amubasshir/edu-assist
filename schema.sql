@@ -88,9 +88,25 @@ ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE organization_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 
--- Profiles: Users can select and update their own profiles
-CREATE POLICY "Users can view own profile" 
-ON profiles FOR SELECT USING (auth.uid() = id);
+-- Helper function to get user orgs without triggering RLS recursively
+CREATE OR REPLACE FUNCTION get_user_orgs() 
+RETURNS SETOF uuid
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+  SELECT org_id FROM organization_members WHERE user_id = auth.uid();
+$$;
+
+-- Profiles: Users can view their own profile OR profiles of users in their organizations
+CREATE POLICY "Users can view own profile and team members" 
+ON profiles FOR SELECT USING (
+  id = auth.uid() OR 
+  id IN (
+    SELECT user_id FROM organization_members WHERE org_id IN (SELECT get_user_orgs())
+  )
+);
 
 CREATE POLICY "Users can update own profile" 
 ON profiles FOR UPDATE USING (auth.uid() = id);
@@ -98,30 +114,22 @@ ON profiles FOR UPDATE USING (auth.uid() = id);
 -- Org Members: Users can see members of orgs they belong to
 CREATE POLICY "Users can view members of their orgs"
 ON organization_members FOR SELECT USING (
-  org_id IN (
-    SELECT org_id FROM organization_members WHERE user_id = auth.uid()
-  )
+  org_id IN (SELECT get_user_orgs())
 );
 
 -- Organizations: Users can view their orgs
 CREATE POLICY "Users can view their orgs"
 ON organizations FOR SELECT USING (
-  id IN (
-    SELECT org_id FROM organization_members WHERE user_id = auth.uid()
-  )
+  id IN (SELECT get_user_orgs())
 );
 
 -- Documents: Users can view and insert documents in their orgs
 CREATE POLICY "Users can view their org documents"
 ON documents FOR SELECT USING (
-  org_id IN (
-    SELECT org_id FROM organization_members WHERE user_id = auth.uid()
-  )
+  org_id IN (SELECT get_user_orgs())
 );
 
 CREATE POLICY "Users can insert their org documents"
 ON documents FOR INSERT WITH CHECK (
-  org_id IN (
-    SELECT org_id FROM organization_members WHERE user_id = auth.uid()
-  )
+  org_id IN (SELECT get_user_orgs())
 );
