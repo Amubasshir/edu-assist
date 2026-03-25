@@ -9,8 +9,14 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.97",
+    "@pdf-lib/fontkit": "^1.1.1",
     "@supabase/supabase-js": "^2.98.0",
+    "html2pdf.js": "^0.14.0",
     "next": "16.1.6",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.1",
+    "pdfreader": "^3.0.8",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },

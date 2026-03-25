@@ -1,16 +1,18 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 export default function DocumentUploadPage() {
   const router = useRouter();
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState(null);
   const [targetLanguage, setTargetLanguage] = useState("");
-  const [uploading, setUploading] = useState(false);
   const [sessionData, setSessionData] = useState(null);
+  const [translationProgress, setTranslationProgress] = useState(0);
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [translatedPDF, setTranslatedPDF] = useState(null);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -89,35 +91,127 @@ export default function DocumentUploadPage() {
       alert("Please select a target language.");
       return;
     }
-    if (!sessionData?.orgId) {
-      alert("Error: Organization not found.");
-      return;
-    }
 
-    setUploading(true);
+    setIsTranslating(true);
+    setTranslationProgress(0);
+
     try {
-      // Create Database Record
-      const { error } = await supabase.from("documents").insert({
-        org_id: sessionData.orgId,
-        user_id: sessionData.userId,
-        file_name: file.name,
-        file_size_kb: Math.round(file.size / 1024),
-        document_type: "Translation",
-        target_language: targetLanguage,
-        status: "Pending" // Initial state
+      setTranslationProgress(10);
+
+      // Create FormData for API call
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('language', targetLanguage);
+
+      setTranslationProgress(30);
+
+      // Call the translate-pdf API
+      const response = await fetch('/api/translate-pdf', {
+        method: 'POST',
+        body: formData,
       });
 
-      if (error) throw error;
+      setTranslationProgress(70);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Translation failed');
+      }
+
+      const result = await response.json();
+      const { translatedText } = result;
+      setTranslationProgress(80);
+
+      // Generate PDF dynamically using html2pdf.js to handle Arabic complex text, RTL, and Asian characters perfectly.
+      const html2pdf = (await import('html2pdf.js')).default;
       
+      const container = document.createElement("div");
+      
+      // Determine if RTL language
+      const isRTL = targetLanguage === "ar";
+      container.dir = isRTL ? "rtl" : "ltr";
+      
+      container.innerHTML = `
+        <div style="padding: 40px; font-family: sans-serif; font-size: 14px; white-space: pre-wrap; line-height: 1.6; color: #000; direction: ${isRTL ? 'rtl' : 'ltr'}; text-align: ${isRTL ? 'right' : 'left'};">
+          ${translatedText}
+        </div>
+      `;
+
+      // Set PDF options
+      const opt = {
+        margin:       0.5,
+        filename:     `translated_${targetLanguage}_${file.name}`,
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2, useCORS: true },
+        jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
+      };
+
+      const pdfBlob = await html2pdf().set(opt).from(container).output('blob');
+
+      setTranslationProgress(90);
+
+      // Save translation record to database
+      if (sessionData) {
+        const fileName = `${Date.now()}_translated_${targetLanguage}_${file.name}`;
+        
+        // Upload to storage bucket
+        const { error: uploadError } = await supabase.storage
+          .from("translated-pdfs")
+          .upload(`${sessionData.userId}/${fileName}`, pdfBlob, {
+            contentType: "application/pdf",
+          });
+
+        if (uploadError) {
+          console.error("Failed to upload to storage:", uploadError);
+        }
+
+        const { error } = await supabase.from("documents").insert({
+          org_id: sessionData.orgId,
+          user_id: sessionData.userId,
+          file_name: fileName,
+          file_size_kb: Math.round(pdfBlob.size / 1024),
+          document_type: "Translation",
+          target_language: targetLanguage,
+          status: "Completed",
+        });
+
+        if (error) {
+          console.warn("Failed to save to database:", error);
+          // Don't throw here, translation was successful
+        }
+      }
+
+      setTranslationProgress(100);
+
+      // Set the translated PDF for download
+      setTranslatedPDF(pdfBlob);
+
       const langName = languages.find(l => l.code === targetLanguage)?.name;
-      alert(`Successfully uploaded and queued for translation to ${langName}!`);
-      router.push("/dashboard/queue");
-      
+      alert(`Successfully translated to ${langName}!`);
+
+      // Reset form
+      setFile(null);
+      setTargetLanguage("");
+      setIsTranslating(false);
+
     } catch (error) {
-      alert("Failed to upload document: " + error.message);
+      console.error("Translation error:", error);
+      alert("Failed to translate document: " + error.message);
     } finally {
-      setUploading(false);
+      setIsTranslating(false);
+      setTranslationProgress(0);
     }
+  };
+
+  const downloadPDF = (blob, filename) => {
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
   };
 
   return (
@@ -208,7 +302,8 @@ export default function DocumentUploadPage() {
                 id="language"
                 value={targetLanguage}
                 onChange={(e) => setTargetLanguage(e.target.value)}
-                className="appearance-none w-full bg-beige/50 border border-gray-border text-black px-4 py-3.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-moss focus:border-moss transition-shadow text-base"
+                disabled={isTranslating}
+                className="appearance-none w-full bg-beige/50 border border-gray-border text-black px-4 py-3.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-moss focus:border-moss transition-shadow text-base disabled:opacity-50"
               >
                 <option value="" disabled>Select a language...</option>
                 {languages.map((lang) => (
@@ -229,17 +324,52 @@ export default function DocumentUploadPage() {
           <div>
             <button
               onClick={handleTranslate}
-              disabled={!file || !targetLanguage || uploading}
+              disabled={!file || !targetLanguage || isTranslating}
               className={`w-full py-3.5 rounded-lg font-semibold text-lg transition-all shadow-sm ${
-                file && targetLanguage && !uploading
+                file && targetLanguage && !isTranslating
                   ? "bg-moss text-white hover:bg-moss-light hover:shadow-md"
                   : "bg-gray-border text-gray cursor-not-allowed opacity-70"
               }`}
             >
-              {uploading ? "Uploading..." : "Start Translation"}
+              {isTranslating ? `Translating... ${translationProgress}%` : "Start Translation"}
             </button>
           </div>
         </div>
+
+        {/* TRANSLATION PROGRESS */}
+        {isTranslating && (
+          <div className="space-y-2">
+            <div className="w-full bg-gray-border rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-moss h-full rounded-full transition-all duration-300"
+                style={{ width: `${translationProgress}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray text-center">
+              {translationProgress < 30 && "Loading PDF libraries..."}
+              {translationProgress >= 30 && translationProgress < 60 && "Extracting document text..."}
+              {translationProgress >= 60 && translationProgress < 90 && "Translating content..."}
+              {translationProgress >= 90 && "Finalizing document..."}
+            </p>
+          </div>
+        )}
+
+        {/* DOWNLOAD BUTTON */}
+        {translatedPDF && (
+          <div>
+            <button
+              onClick={() => {
+                downloadPDF(translatedPDF, `IEP_translated_${targetLanguage}.pdf`);
+              }}
+              className="w-full py-3.5 rounded-lg font-semibold text-lg transition-all shadow-sm bg-green-600 text-white hover:bg-green-700 hover:shadow-md flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download Translated PDF
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
