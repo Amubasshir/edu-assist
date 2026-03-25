@@ -184,13 +184,16 @@ export default function DocumentUploadPage() {
       setTranslationProgress(100);
 
       // Set the translated PDF for download
-      setTranslatedPDF(pdfBlob);
+      setTranslatedPDF({ blob: pdfBlob, lang: targetLanguage });
 
       const langName = languages.find(l => l.code === targetLanguage)?.name;
       alert(`Successfully translated to ${langName}!`);
 
       // Reset form
       setFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
       setTargetLanguage("");
       setIsTranslating(false);
 
@@ -359,7 +362,8 @@ export default function DocumentUploadPage() {
           <div>
             <button
               onClick={() => {
-                downloadPDF(translatedPDF, `IEP_translated_${targetLanguage}.pdf`);
+                downloadPDF(translatedPDF.blob, `IEP_translated_${translatedPDF.lang}.pdf`);
+                setTranslatedPDF(null);
               }}
               className="w-full py-3.5 rounded-lg font-semibold text-lg transition-all shadow-sm bg-green-600 text-white hover:bg-green-700 hover:shadow-md flex items-center justify-center gap-2"
             >
