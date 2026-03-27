@@ -131,9 +131,12 @@ export default function DocumentUploadPage() {
       const isRTL = targetLanguage === "ar";
       container.dir = isRTL ? "rtl" : "ltr";
       
+      // We no longer escape < > because we are explicitly asking Claude to provide HTML tags
+      const formattedText = translatedText.replace(/\n/g, "<br/>");
+        
       container.innerHTML = `
-        <div style="padding: 40px; font-family: sans-serif; font-size: 14px; white-space: pre-wrap; line-height: 1.6; color: #000; direction: ${isRTL ? 'rtl' : 'ltr'}; text-align: ${isRTL ? 'right' : 'left'};">
-          ${translatedText}
+        <div style="padding: 40px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 14px; word-wrap: break-word; line-height: 1.5; color: #000; direction: ${isRTL ? 'rtl' : 'ltr'}; text-align: ${isRTL ? 'right' : 'left'};">
+          ${formattedText}
         </div>
       `;
 
