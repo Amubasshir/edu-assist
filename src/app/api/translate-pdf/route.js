@@ -763,7 +763,10 @@ export async function POST(request) {
 
     // Translate using the API
     const translatedSegments = await translateWithAPI(chunks, apiKey, language);
-    const translatedText = translatedSegments.length > 0 ? translatedSegments.join('\n') : 'Failed to produce translation.';
+    let translatedText = translatedSegments.length > 0 ? translatedSegments.join('\n') : 'Failed to produce translation.';
+
+    // Clean up escaped quotes from JSON parsing
+    translatedText = translatedText.replace(/\\"/g, '"');
 
     console.log(`Translation completed, generated ${translatedText.length} characters`);
 
