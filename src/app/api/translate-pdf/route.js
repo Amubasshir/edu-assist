@@ -399,8 +399,7 @@ if (typeof global !== 'undefined') {
   global.HTMLCanvasElement = global.Canvas;
 }
 
-const PdfReader = require('pdfreader').PdfReader;
-// const pdfParse = require('pdf-parse'); // Removed due to module loading issues
+const pdfParse = require('pdf-parse');
 
 // Language mapping
 const LANGUAGE_MAP = {
@@ -682,52 +681,17 @@ export async function POST(request) {
     const buffer = await file.arrayBuffer();
     const nodeBuffer = Buffer.from(buffer);
 
-    // Extract text from PDF using pdfreader
+    // Extract text from PDF using pdf-parse
     let sourceText = '';
 
     try {
-      console.log('Extracting text with pdfreader...');
-      sourceText = await new Promise((resolve, reject) => {
-        const reader = new PdfReader();
-        let text = '';
-
-        reader.parseBuffer(nodeBuffer, (err, item) => {
-          if (err) {
-            reject(err);
-          } else if (!item) {
-            // End of file
-            resolve(text.trim());
-          } else if (item.text) {
-            text += item.text + ' ';
-          }
-        });
-      });
-      console.log(`pdfreader extracted ${sourceText.length} characters`);
+      console.log('Extracting text with pdf-parse...');
+      const data = await pdfParse(nodeBuffer);
+      sourceText = (data.text || '').trim();
+      console.log(`pdf-parse extracted ${sourceText.length} characters`);
     } catch (error) {
-      console.log('pdfreader failed:', error.message);
+      console.log('pdf-parse failed:', error.message);
       sourceText = '';
-    }
-
-    if (!sourceText || sourceText.length < 10) {
-      console.log('pdfreader extracted 0 characters or failed, trying pdf-parse as fallback...');
-      try {
-        // Use the library's core file directly to avoid the buggy debug block in its index.js
-        // that causes ENOENT errors in some environments.
-        const pdfParse = require('pdf-parse/lib/pdf-parse.js');
-        
-        // Handle various ways it might be exported (though lib/pdf-parse.js is usually a direct function)
-        const pdfParseFn = typeof pdfParse === 'function' ? pdfParse : pdfParse.default;
-        
-        if (typeof pdfParseFn === 'function') {
-          const data = await pdfParseFn(nodeBuffer);
-          sourceText = (data.text || '').trim();
-          console.log(`pdf-parse extracted ${sourceText.length} characters`);
-        } else {
-          console.log('pdf-parse fallback failed: core function not found');
-        }
-      } catch (fallbackError) {
-        console.log('pdf-parse fallback error:', fallbackError.message);
-      }
     }
 
     if (!sourceText || sourceText.length < 10) {
