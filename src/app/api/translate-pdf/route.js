@@ -399,7 +399,8 @@ if (typeof global !== 'undefined') {
   global.HTMLCanvasElement = global.Canvas;
 }
 
-const pdfParse = require('pdf-parse');
+// const pdfParse = require('pdf-parse');
+const pdfParse = require('pdf-parse/lib/pdf-parse.js');
 
 // Language mapping
 const LANGUAGE_MAP = {
