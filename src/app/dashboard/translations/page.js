@@ -98,29 +98,62 @@ export default function DocumentUploadPage() {
     try {
       setTranslationProgress(10);
 
-      // Create FormData for API call
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('language', targetLanguage);
-
-      setTranslationProgress(30);
-
-      // Call the translate-pdf API
-      const response = await fetch('/api/translate-pdf', {
+      // Step 1: Extract text from PDF
+      const extractData = new FormData();
+      extractData.append('file', file);
+      extractData.append('language', targetLanguage);
+      extractData.append('action', 'extract');
+      
+      const extractResponse = await fetch('/api/translate-pdf', {
         method: 'POST',
-        body: formData,
+        body: extractData,
       });
 
-      setTranslationProgress(70);
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Translation failed');
+      if (!extractResponse.ok) {
+        const errData = await extractResponse.json();
+        throw new Error(errData.error || 'Failed to extract text from PDF');
       }
 
-      const result = await response.json();
-      const { translatedText } = result;
-      setTranslationProgress(80);
+      const { chunks } = await extractResponse.json();
+      
+      if (!chunks || chunks.length === 0) {
+        throw new Error('No text found in this PDF.');
+      }
+
+      // Step 2: Translate in batches
+      setTranslationProgress(25);
+      const BATCH_SIZE = 5;
+      let translatedSegments = [];
+      const totalBatches = Math.ceil(chunks.length / BATCH_SIZE);
+
+      for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+        const batchChunks = chunks.slice(i, i + BATCH_SIZE);
+        
+        const translateData = new FormData();
+        translateData.append('language', targetLanguage);
+        translateData.append('action', 'translate');
+        translateData.append('chunks', JSON.stringify(batchChunks));
+
+        const batchResponse = await fetch('/api/translate-pdf', {
+          method: 'POST',
+          body: translateData,
+        });
+
+        if (!batchResponse.ok) {
+          const errData = await batchResponse.json();
+          throw new Error(errData.error || `Translation batch ${Math.floor(i/BATCH_SIZE) + 1} failed`);
+        }
+
+        const batchResult = await batchResponse.json();
+        translatedSegments.push(...(batchResult.translatedSegments || []));
+
+        // Update progress smoothly between 25% and 80%
+        const batchProgress = Math.floor(25 + ((i + BATCH_SIZE) / chunks.length) * 55);
+        setTranslationProgress(Math.min(batchProgress, 80));
+      }
+
+      let translatedText = translatedSegments.length > 0 ? translatedSegments.join('\n') : 'Failed to produce translation.';
+      translatedText = translatedText.replace(/\\"/g, '"'); // Cleanup UI quotes
 
       // Generate PDF dynamically using html2pdf.js to handle Arabic complex text, RTL, and Asian characters perfectly.
       const html2pdf = (await import('html2pdf.js')).default;

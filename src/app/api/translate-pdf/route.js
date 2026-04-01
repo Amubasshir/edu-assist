@@ -346,6 +346,8 @@
 // ! v2
 import { NextResponse } from 'next/server';
 
+export const maxDuration = 60; // Set timeout limit (60s is standard hobby max, Pro supports up to 300/900s)
+
 // Add comprehensive canvas polyfills for pdf-parse BEFORE requiring the module
 if (typeof global !== 'undefined') {
   // Basic DOM classes
@@ -544,7 +546,7 @@ async function translateWithAPI(texts, apiKey, language) {
         // model: 'claude-3-haiku-20240307',
         // max_tokens: 4000,
         model: 'claude-sonnet-4-5',
-        max_tokens: 40000,
+        max_tokens: 64000,
         messages: [{
           role: 'user',
           content: `You are a professional document translator. Translate the following JSON array of English text segments strictly into ${langName}. 
@@ -652,13 +654,15 @@ async function createSimplePDF(text) {
 export async function POST(request) {
   try {
     const formData = await request.formData();
-    const file = formData.get('file');
+    const action = formData.get('action');
     const language = formData.get('language');
 
-    if (!file) {
+    // Get API key from environment variable (backend)
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
       return NextResponse.json(
-        { error: 'No file provided' },
-        { status: 400 }
+        { error: 'API key not configured on server' },
+        { status: 500 }
       );
     }
 
@@ -669,12 +673,24 @@ export async function POST(request) {
       );
     }
 
-    // Get API key from environment variable (backend)
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
+    if (action === 'translate') {
+      // Step 2: Only translate the provided chunks (bypasses timeout limits by keeping requests short)
+      const chunksData = formData.get('chunks');
+      if (!chunksData) return NextResponse.json({ error: 'No chunks provided' }, { status: 400 });
+      
+      const chunks = JSON.parse(chunksData);
+      console.log(`Translating batch of ${chunks.length} chunks...`);
+      
+      const translatedSegments = await translateWithAPI(chunks, apiKey, language);
+      return NextResponse.json({ success: true, translatedSegments });
+    }
+
+    // Step 1: File extraction (or full monolithic translation if no action specified)
+    const file = formData.get('file');
+    if (!file) {
       return NextResponse.json(
-        { error: 'API key not configured on server' },
-        { status: 500 }
+        { error: 'No file provided' },
+        { status: 400 }
       );
     }
 
@@ -726,8 +742,29 @@ export async function POST(request) {
 
     console.log(`Split text into ${chunks.length} chunks for translation`);
 
-    // Translate using the API
-    const translatedSegments = await translateWithAPI(chunks, apiKey, language);
+    if (action === 'extract') {
+      // Return chunks to client so they can iterate through them
+      return NextResponse.json({ success: true, chunks, originalText: sourceText, language });
+    }
+
+    // Process chunks in parallel batches to avoid Vercel/Claude timeouts (fallback for old flow)
+    const BATCH_SIZE = 3; // Translate 3 chunks concurrently at a time to respect rate limits while gaining speed
+    let translatedSegments = [];
+
+    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+      const batchChunks = chunks.slice(i, i + BATCH_SIZE);
+      console.log(`Translating batch ${Math.floor(i / BATCH_SIZE) + 1} of ${Math.ceil(chunks.length / BATCH_SIZE)}...`);
+      
+      const batchPromises = batchChunks.map(c => translateWithAPI([c], apiKey, language));
+      
+      // Wait for the current batch to finish
+      const batchResultsArrays = await Promise.all(batchPromises);
+      
+      // Flatten the individual chunk arrays returned by translateWithAPI
+      const batchSegments = batchResultsArrays.map(resArr => resArr.length > 0 ? resArr[0] : '');
+      translatedSegments.push(...batchSegments);
+    }
+
     let translatedText = translatedSegments.length > 0 ? translatedSegments.join('\n') : 'Failed to produce translation.';
 
     // Clean up escaped quotes from JSON parsing
