@@ -152,27 +152,29 @@ export default function DocumentUploadPage() {
         setTranslationProgress(Math.min(batchProgress, 80));
       }
 
-      let translatedText = translatedSegments.length > 0 ? translatedSegments.join('\n') : 'Failed to produce translation.';
-      translatedText = translatedText.replace(/\\"/g, '"'); // Cleanup UI quotes
+      // Group segments into larger blocks to reduce the number of addPage calls
+      // 12,000 chars is roughly 4 pages, which is well under Chrome's canvas height limit at scale 2
+      const MAX_CHARS = 12000;
+      const blocks = [];
+      let currentBlock = "";
+      
+      for (const seg of translatedSegments) {
+        let cleanSeg = (typeof seg === 'string' ? seg : JSON.stringify(seg) || "").replace(/\\"/g, '"');
+        if (currentBlock.length + cleanSeg.length > MAX_CHARS && currentBlock.length > 0) {
+          blocks.push(currentBlock);
+          currentBlock = cleanSeg;
+        } else {
+          currentBlock += (currentBlock ? "\n\n" : "") + cleanSeg;
+        }
+      }
+      if (currentBlock) blocks.push(currentBlock);
 
       // Generate PDF dynamically using html2pdf.js to handle Arabic complex text, RTL, and Asian characters perfectly.
       const html2pdf = (await import('html2pdf.js')).default;
       
-      const container = document.createElement("div");
-      
       // Determine if RTL language
       const isRTL = targetLanguage === "ar";
-      container.dir = isRTL ? "rtl" : "ltr";
       
-      // We no longer escape < > because we are explicitly asking Claude to provide HTML tags
-      const formattedText = translatedText.replace(/\n/g, "<br/>");
-        
-      container.innerHTML = `
-        <div style="padding: 40px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 14px; word-wrap: break-word; line-height: 1.5; color: #000; direction: ${isRTL ? 'rtl' : 'ltr'}; text-align: ${isRTL ? 'right' : 'left'};">
-          ${formattedText}
-        </div>
-      `;
-
       // Set PDF options
       const opt = {
         margin:       0.5,
@@ -182,7 +184,33 @@ export default function DocumentUploadPage() {
         jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
       };
 
-      const pdfBlob = await html2pdf().set(opt).from(container).output('blob');
+      let worker = html2pdf().set(opt);
+
+      for (let i = 0; i < blocks.length; i++) {
+        const container = document.createElement("div");
+        container.dir = isRTL ? "rtl" : "ltr";
+        const formattedText = blocks[i].replace(/\n/g, "<br/>");
+
+        container.innerHTML = `
+          <div style="padding: 40px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 14px; word-wrap: break-word; line-height: 1.5; color: #000; direction: ${isRTL ? 'rtl' : 'ltr'}; text-align: ${isRTL ? 'right' : 'left'};">
+            ${formattedText}
+          </div>
+        `;
+
+        if (i === 0) {
+          worker = worker.from(container).toPdf();
+        } else {
+          worker = worker.get('pdf').then((pdf) => {
+            pdf.addPage();
+          }).from(container).toContainer().toCanvas().toPdf();
+        }
+        
+        // Update progress slightly during expensive PDF generation
+        const progress = 80 + Math.floor(((i + 1) / blocks.length) * 10);
+        setTranslationProgress(progress);
+      }
+
+      const pdfBlob = await worker.output('blob');
 
       setTranslationProgress(90);
 
